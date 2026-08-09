@@ -503,27 +503,51 @@ list_instances() {
     echo "-------------------------------------------------------------"
 }
 
-# 交互式选择实例类型与名称，回显到全局变量 SVC
-# $1: 提示动作名称
+# 交互式选择实例：列出编号让用户直接选择，回显到全局变量 ITYPE/INAME/SVC
 pick_instance() {
-    local action=$1
-    list_instances
-    read -p "类型 (server/client): " itype
-    read -p "实例名称: " iname
-    if [[ "$itype" == "server" ]]; then
-        SVC="hysteria-server@${iname}"
-    elif [[ "$itype" == "client" ]]; then
-        SVC="hysteria-client@${iname}"
-    else
-        echo -e "${red}类型无效${plain}"
+    local -a types names
+    local f name
+    # 服务端：/etc/hysteria/*.yaml 但排除 config.yaml 与 client-*.yaml
+    for f in /etc/hysteria/*.yaml; do
+        [[ -e "$f" ]] || continue
+        name=$(basename "$f" .yaml)
+        [[ "$name" == "config" ]] && continue
+        [[ "$name" == client-* ]] && continue
+        types+=("server")
+        names+=("$name")
+    done
+    # 客户端：/etc/hysteria/client-*.yaml
+    for f in /etc/hysteria/client-*.yaml; do
+        [[ -e "$f" ]] || continue
+        name=$(basename "$f" .yaml)
+        name=${name#client-}
+        types+=("client")
+        names+=("$name")
+    done
+
+    local count=${#names[@]}
+    if [[ $count -eq 0 ]]; then
+        echo -e "${yellow}暂无实例${plain}"
         return 1
     fi
-    if [[ -z "$iname" ]]; then
-        echo -e "${red}名称不能为空${plain}"
+
+    echo -e "${yellow}请选择实例：${plain}"
+    local i state
+    for ((i = 0; i < count; i++)); do
+        state=$(systemctl is-active "hysteria-${types[$i]}@${names[$i]}" 2>/dev/null)
+        printf "  ${green}%d${plain}) [%-6s] %-16s %s\n" "$((i + 1))" "${types[$i]}" "${names[$i]}" "$state"
+    done
+
+    local sel
+    read -p "输入序号: " sel
+    if ! [[ "$sel" =~ ^[0-9]+$ ]] || [[ "$sel" -lt 1 || "$sel" -gt $count ]]; then
+        echo -e "${red}序号无效${plain}"
         return 1
     fi
-    ITYPE="$itype"
-    INAME="$iname"
+    local idx=$((sel - 1))
+    ITYPE="${types[$idx]}"
+    INAME="${names[$idx]}"
+    SVC="hysteria-${ITYPE}@${INAME}"
     return 0
 }
 
