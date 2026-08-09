@@ -337,7 +337,7 @@ add_server_instance() {
         echo -e "已生成随机密码：${green}${hy_pass}${plain}"
     fi
 
-    read -p "域名 (留空则使用自签证书，默认域名 bing.com，客户端需 insecure): " hy_domain
+    read -p "域名 (留空则使用自签证书，默认域名 www.bing.com，客户端需 insecure): " hy_domain
 
     local sni_hint insecure_hint
     if [[ -n "$hy_domain" ]]; then
@@ -364,8 +364,8 @@ EOF
         sni_hint="$hy_domain"
         insecure_hint="false"
     else
-        # 未提供域名 -> 自签证书，默认域名 bing.com，客户端需 insecure=true
-        hy_domain="bing.com"
+        # 未提供域名 -> 自签证书，默认域名 www.bing.com，客户端需 insecure=true
+        hy_domain="www.bing.com"
         local crt="/etc/hysteria/${name}.crt"
         local key="/etc/hysteria/${name}.key"
         openssl req -x509 -nodes -newkey ec:<(openssl ecparam -name prime256v1) \
@@ -391,7 +391,7 @@ masquerade:
     url: https://www.bing.com/
     rewriteHost: true
 EOF
-        sni_hint="bing.com"
+        sni_hint="www.bing.com"
         insecure_hint="true"
     fi
 
@@ -421,8 +421,8 @@ add_client_instance() {
 
     read -p "服务器地址 (host:port，例如 1.2.3.4:443): " hy_server
     read -p "连接密码: " hy_pass
-    read -p "SNI (留空默认 bing.com): " hy_sni
-    [[ -z "$hy_sni" ]] && hy_sni="bing.com"
+    read -p "SNI (留空默认 www.bing.com): " hy_sni
+    [[ -z "$hy_sni" ]] && hy_sni="www.bing.com"
     read -p "是否跳过证书校验 insecure？(留空默认 Yes) [Y/n]: " hy_insecure
     local insecure_val
     if [[ "$hy_insecure" == "n" || "$hy_insecure" == "N" ]]; then
