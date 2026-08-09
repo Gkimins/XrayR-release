@@ -295,7 +295,7 @@ LimitRSS=infinity
 LimitCORE=infinity
 LimitNOFILE=999999
 WorkingDirectory=/usr/local/XrayR/
-ExecStart=/usr/local/XrayR/XrayR --config /etc/XrayR/config-%i.yml
+ExecStart=/usr/local/XrayR/XrayR --config /etc/XrayR/%i/config.yml
 Restart=on-failure
 RestartSec=10
 
@@ -365,7 +365,12 @@ add_xrayr_instance() {
     echo -e "${yellow}== 新增 XrayR 实例 ==${plain}"
     read -p "实例名称 (例如 x1): " name
     valid_name "$name" || return
-    local cfg="/etc/XrayR/config-${name}.yml"
+    if [[ "$name" == "cert" ]]; then
+        echo -e "${red}cert 为保留名称，请换一个${plain}"
+        return
+    fi
+    local dir="/etc/XrayR/${name}"
+    local cfg="${dir}/config.yml"
     if [[ -f "$cfg" ]]; then
         read -p "实例 ${name} 已存在，是否覆盖？[y/N]: " ow
         [[ "$ow" != "y" && "$ow" != "Y" ]] && echo "已取消" && return
@@ -389,14 +394,14 @@ add_xrayr_instance() {
         echo -e "${yellow}提示：dns/file 模式的证书提供商及路径请在 ${cfg} 中手动完善${plain}"
     fi
 
-    mkdir -p /etc/XrayR
+    mkdir -p "$dir"
 
-    # 每个实例使用独立的辅助配置文件，可分别定制 route / outbound / dns / inbound / rulelist
-    local route_cfg="/etc/XrayR/route-${name}.json"
-    local outbound_cfg="/etc/XrayR/custom_outbound-${name}.json"
-    local dns_cfg="/etc/XrayR/dns-${name}.json"
-    local inbound_cfg="/etc/XrayR/custom_inbound-${name}.json"
-    local rulelist_cfg="/etc/XrayR/rulelist-${name}"
+    # 每个实例使用独立目录存放辅助配置，可分别定制 route / outbound / dns / inbound / rulelist
+    local route_cfg="${dir}/route.json"
+    local outbound_cfg="${dir}/custom_outbound.json"
+    local dns_cfg="${dir}/dns.json"
+    local inbound_cfg="${dir}/custom_inbound.json"
+    local rulelist_cfg="${dir}/rulelist"
 
     # 从共享模板复制 (若存在)，避免多个实例共用同一份规则
     seed_file "$route_cfg"    /etc/XrayR/route.json           '{"rules":[]}'
@@ -489,15 +494,14 @@ EOF
 # 列出所有 XrayR 实例
 list_xrayr_instances() {
     echo -e "${yellow}== XrayR 实例列表 ==${plain}"
-    printf "%-16s %-10s %s\n" "名称" "状态" "配置文件"
+    printf "%-16s %-10s %s\n" "名称" "状态" "配置目录"
     echo "-------------------------------------------------------------"
     local f name state
-    for f in /etc/XrayR/config-*.yml; do
+    for f in /etc/XrayR/*/config.yml; do
         [[ -e "$f" ]] || continue
-        name=$(basename "$f" .yml)
-        name=${name#config-}
+        name=$(basename "$(dirname "$f")")
         state=$(systemctl is-active "XrayR@${name}" 2>/dev/null)
-        printf "%-16s %-10s %s\n" "$name" "$state" "$f"
+        printf "%-16s %-10s %s\n" "$name" "$state" "$(dirname "$f")"
     done
     echo "-------------------------------------------------------------"
 }
@@ -506,10 +510,9 @@ list_xrayr_instances() {
 pick_xrayr_instance() {
     local -a names
     local f name
-    for f in /etc/XrayR/config-*.yml; do
+    for f in /etc/XrayR/*/config.yml; do
         [[ -e "$f" ]] || continue
-        name=$(basename "$f" .yml)
-        name=${name#config-}
+        name=$(basename "$(dirname "$f")")
         names+=("$name")
     done
 
@@ -573,12 +576,7 @@ delete_xrayr_instance() {
 
     systemctl stop "$X_SVC" 2>/dev/null
     systemctl disable "$X_SVC" 2>/dev/null
-    rm -f "/etc/XrayR/config-${X_NAME}.yml" \
-          "/etc/XrayR/route-${X_NAME}.json" \
-          "/etc/XrayR/custom_outbound-${X_NAME}.json" \
-          "/etc/XrayR/dns-${X_NAME}.json" \
-          "/etc/XrayR/custom_inbound-${X_NAME}.json" \
-          "/etc/XrayR/rulelist-${X_NAME}"
+    rm -rf "/etc/XrayR/${X_NAME}"
     echo -e "${green}XrayR 实例 ${X_NAME} 已删除${plain}"
 }
 
