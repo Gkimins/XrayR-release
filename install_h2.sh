@@ -349,6 +349,17 @@ valid_name() {
 # XrayR 多实例管理：XrayR@<name> -> /etc/XrayR/config-<name>.yml
 # ===========================================================================
 
+# 为实例生成独立辅助配置：若目标已存在则保留；否则从共享模板复制，无模板则写默认内容
+# $1 目标文件  $2 共享模板  $3 默认内容
+seed_file() {
+    [[ -f "$1" ]] && return 0
+    if [[ -f "$2" ]]; then
+        cp "$2" "$1"
+    else
+        printf '%s\n' "$3" > "$1"
+    fi
+}
+
 # 新增一个 XrayR 实例
 add_xrayr_instance() {
     echo -e "${yellow}== 新增 XrayR 实例 ==${plain}"
@@ -379,15 +390,30 @@ add_xrayr_instance() {
     fi
 
     mkdir -p /etc/XrayR
+
+    # 每个实例使用独立的辅助配置文件，可分别定制 route / outbound / dns / inbound / rulelist
+    local route_cfg="/etc/XrayR/route-${name}.json"
+    local outbound_cfg="/etc/XrayR/custom_outbound-${name}.json"
+    local dns_cfg="/etc/XrayR/dns-${name}.json"
+    local inbound_cfg="/etc/XrayR/custom_inbound-${name}.json"
+    local rulelist_cfg="/etc/XrayR/rulelist-${name}"
+
+    # 从共享模板复制 (若存在)，避免多个实例共用同一份规则
+    seed_file "$route_cfg"    /etc/XrayR/route.json           '{"rules":[]}'
+    seed_file "$outbound_cfg" /etc/XrayR/custom_outbound.json '[]'
+    seed_file "$dns_cfg"      /etc/XrayR/dns.json             '{}'
+    seed_file "$inbound_cfg"  /etc/XrayR/custom_inbound.json  '[]'
+    seed_file "$rulelist_cfg" /etc/XrayR/rulelist             ''
+
     cat > "$cfg" <<EOF
 Log:
   Level: warning # Log level: none, error, warning, info, debug
   AccessPath: # /etc/XrayR/access.Log
   ErrorPath: # /etc/XrayR/error.log
-DnsConfigPath: # /etc/XrayR/dns.json
-RouteConfigPath: /etc/XrayR/route.json
-InboundConfigPath: # /etc/XrayR/custom_inbound.json
-OutboundConfigPath: /etc/XrayR/custom_outbound.json
+DnsConfigPath: # ${dns_cfg}
+RouteConfigPath: ${route_cfg}
+InboundConfigPath: # ${inbound_cfg}
+OutboundConfigPath: ${outbound_cfg}
 ConnectionConfig:
   Handshake: 4
   ConnIdle: 30
@@ -407,7 +433,7 @@ Nodes:
       EnableXTLS: false
       SpeedLimit: 0
       DeviceLimit: 0
-      RuleListPath: # /etc/XrayR/rulelist
+      RuleListPath: # ${rulelist_cfg}
     ControllerConfig:
       ListenIP: 0.0.0.0
       SendIP: 0.0.0.0
@@ -454,6 +480,7 @@ EOF
         echo -e "${green}XrayR 实例 ${name} 启动成功${plain}"
         echo -e "  服务：${green}XrayR@${name}${plain}   配置：${green}${cfg}${plain}"
         echo -e "  面板：${green}${x_panel}${plain}   NodeID：${green}${x_nodeid}${plain}   类型：${green}${x_ntype}${plain}"
+        echo -e "  路由：${green}${route_cfg}${plain}   出站：${green}${outbound_cfg}${plain} (每实例独立，可分别编辑)"
     else
         echo -e "${red}XrayR 实例 ${name} 可能启动失败，请执行：journalctl -u XrayR@${name} -e 查看日志${plain}"
     fi
@@ -546,7 +573,12 @@ delete_xrayr_instance() {
 
     systemctl stop "$X_SVC" 2>/dev/null
     systemctl disable "$X_SVC" 2>/dev/null
-    rm -f "/etc/XrayR/config-${X_NAME}.yml"
+    rm -f "/etc/XrayR/config-${X_NAME}.yml" \
+          "/etc/XrayR/route-${X_NAME}.json" \
+          "/etc/XrayR/custom_outbound-${X_NAME}.json" \
+          "/etc/XrayR/dns-${X_NAME}.json" \
+          "/etc/XrayR/custom_inbound-${X_NAME}.json" \
+          "/etc/XrayR/rulelist-${X_NAME}"
     echo -e "${green}XrayR 实例 ${X_NAME} 已删除${plain}"
 }
 
