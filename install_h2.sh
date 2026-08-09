@@ -278,7 +278,7 @@ EOF
 }
 
 # 写入 XrayR systemd 模板单元 (多实例)，与原 XrayR.service 一致仅改配置路径
-# XrayR@<name> -> /etc/XrayR/config-<name>.yml
+# XrayR@<name> -> /etc/XrayR/<name>/config.yml
 install_xrayr_template() {
     cat > /etc/systemd/system/XrayR@.service <<'EOF'
 [Unit]
@@ -310,7 +310,12 @@ ensure_xrayr() {
     if [[ -f /etc/systemd/system/XrayR.service ]]; then
         echo -e "${green}XrayR 已安装，跳过安装 (如需更新请使用菜单)${plain}"
     else
-        install_XrayR "$@"
+        # 有版本号则指定安装，否则安装最新版 (不能传空参数，否则会被当成指定版本 "v")
+        if [[ -n "$1" ]]; then
+            install_XrayR "$1"
+        else
+            install_XrayR
+        fi
     fi
     install_xrayr_template
 }
@@ -346,7 +351,7 @@ valid_name() {
 }
 
 # ===========================================================================
-# XrayR 多实例管理：XrayR@<name> -> /etc/XrayR/config-<name>.yml
+# XrayR 多实例管理：XrayR@<name> -> /etc/XrayR/<name>/config.yml
 # ===========================================================================
 
 # 为实例生成独立辅助配置：若目标已存在则保留；否则从共享模板复制，无模板则写默认内容
@@ -585,6 +590,10 @@ add_server_instance() {
     echo -e "${yellow}== 新增 Hysteria2 服务端实例 ==${plain}"
     read -p "实例名称 (例如 s1): " name
     valid_name "$name" || return
+    if [[ "$name" == client-* ]]; then
+        echo -e "${red}服务端名称不能以 client- 开头 (与客户端命名冲突)${plain}"
+        return
+    fi
     local cfg="/etc/hysteria/${name}.yaml"
     if [[ -f "$cfg" ]]; then
         read -p "实例 ${name} 已存在，是否覆盖？[y/N]: " ow
