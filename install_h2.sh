@@ -83,6 +83,18 @@ install_base() {
     fi
 }
 
+# 仅在缺少依赖时才安装依赖，二次运行脚本时跳过 (不再更新依赖)
+ensure_base() {
+    local cmd
+    for cmd in wget curl unzip tar socat openssl ss shuf; do
+        if ! command -v "$cmd" >/dev/null 2>&1; then
+            install_base
+            return
+        fi
+    done
+    echo -e "${green}依赖已安装，跳过依赖安装${plain}"
+}
+
 # 0: running, 1: not running, 2: not installed
 check_status() {
     if [[ ! -f /etc/systemd/system/XrayR.service ]]; then
@@ -583,7 +595,7 @@ main_menu() {
 }
 
 echo -e "${green}开始安装${plain}"
-install_base
+ensure_base
 # install_acme
 ensure_xrayr "$1"
 ensure_hysteria2
