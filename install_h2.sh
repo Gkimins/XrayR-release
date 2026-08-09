@@ -277,13 +277,42 @@ EOF
     systemctl daemon-reload
 }
 
-# 仅在未安装时安装 XrayR，避免重复运行时误删已有安装
+# 写入 XrayR systemd 模板单元 (多实例)，与原 XrayR.service 一致仅改配置路径
+# XrayR@<name> -> /etc/XrayR/config-<name>.yml
+install_xrayr_template() {
+    cat > /etc/systemd/system/XrayR@.service <<'EOF'
+[Unit]
+Description=XrayR Service (%i)
+After=network.target nss-lookup.target
+Wants=network.target
+
+[Service]
+User=root
+Group=root
+Type=simple
+LimitAS=infinity
+LimitRSS=infinity
+LimitCORE=infinity
+LimitNOFILE=999999
+WorkingDirectory=/usr/local/XrayR/
+ExecStart=/usr/local/XrayR/XrayR --config /etc/XrayR/config-%i.yml
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    systemctl daemon-reload
+}
+
+# 仅在未安装时安装 XrayR，避免重复运行时误删已有安装；并确保多实例模板存在 (幂等)
 ensure_xrayr() {
     if [[ -f /etc/systemd/system/XrayR.service ]]; then
         echo -e "${green}XrayR 已安装，跳过安装 (如需更新请使用菜单)${plain}"
     else
         install_XrayR "$@"
     fi
+    install_xrayr_template
 }
 
 # 仅在未安装时安装 Hysteria2 二进制，并确保客户端模板存在 (幂等)
@@ -314,6 +343,211 @@ valid_name() {
         return 1
     fi
     return 0
+}
+
+# ===========================================================================
+# XrayR 多实例管理：XrayR@<name> -> /etc/XrayR/config-<name>.yml
+# ===========================================================================
+
+# 新增一个 XrayR 实例
+add_xrayr_instance() {
+    echo -e "${yellow}== 新增 XrayR 实例 ==${plain}"
+    read -p "实例名称 (例如 x1): " name
+    valid_name "$name" || return
+    local cfg="/etc/XrayR/config-${name}.yml"
+    if [[ -f "$cfg" ]]; then
+        read -p "实例 ${name} 已存在，是否覆盖？[y/N]: " ow
+        [[ "$ow" != "y" && "$ow" != "Y" ]] && echo "已取消" && return
+    fi
+
+    read -p "面板类型 PanelType (SSpanel/V2board/NewV2board/PMpanel/Proxypanel/V2RaySocks，默认 NewV2board): " x_panel
+    [[ -z "$x_panel" ]] && x_panel="NewV2board"
+    read -p "面板地址 ApiHost (例如 http://127.0.0.1:667): " x_host
+    read -p "面板密钥 ApiKey: " x_key
+    read -p "节点 ID NodeID: " x_nodeid
+    read -p "节点类型 NodeType (V2ray/Vmess/Vless/Shadowsocks/Trojan，默认 V2ray): " x_ntype
+    [[ -z "$x_ntype" ]] && x_ntype="V2ray"
+    read -p "证书模式 CertMode (none/file/http/dns，默认 none): " x_certmode
+    [[ -z "$x_certmode" ]] && x_certmode="none"
+
+    local x_domain="example.com"
+    local x_email="test@me.com"
+    if [[ "$x_certmode" != "none" ]]; then
+        read -p "证书域名 CertDomain: " x_domain
+        read -p "证书邮箱 Email: " x_email
+        echo -e "${yellow}提示：dns/file 模式的证书提供商及路径请在 ${cfg} 中手动完善${plain}"
+    fi
+
+    mkdir -p /etc/XrayR
+    cat > "$cfg" <<EOF
+Log:
+  Level: warning # Log level: none, error, warning, info, debug
+  AccessPath: # /etc/XrayR/access.Log
+  ErrorPath: # /etc/XrayR/error.log
+DnsConfigPath: # /etc/XrayR/dns.json
+RouteConfigPath: /etc/XrayR/route.json
+InboundConfigPath: # /etc/XrayR/custom_inbound.json
+OutboundConfigPath: /etc/XrayR/custom_outbound.json
+ConnectionConfig:
+  Handshake: 4
+  ConnIdle: 30
+  UplinkOnly: 2
+  DownlinkOnly: 4
+  BufferSize: 64
+Nodes:
+  -
+    PanelType: "${x_panel}"
+    ApiConfig:
+      ApiHost: "${x_host}"
+      ApiKey: "${x_key}"
+      NodeID: ${x_nodeid}
+      NodeType: ${x_ntype}
+      Timeout: 30
+      EnableVless: false
+      EnableXTLS: false
+      SpeedLimit: 0
+      DeviceLimit: 0
+      RuleListPath: # /etc/XrayR/rulelist
+    ControllerConfig:
+      ListenIP: 0.0.0.0
+      SendIP: 0.0.0.0
+      UpdatePeriodic: 60
+      EnableDNS: false
+      DNSType: AsIs
+      EnableProxyProtocol: false
+      AutoSpeedLimitConfig:
+        Limit: 0
+        WarnTimes: 0
+        LimitSpeed: 0
+        LimitDuration: 0
+      GlobalDeviceLimitConfig:
+        Enable: false
+        RedisAddr: 127.0.0.1:6379
+        RedisPassword: YOUR PASSWORD
+        RedisDB: 0
+        Timeout: 5
+        Expiry: 60
+      EnableFallback: false
+      FallBackConfigs:
+        -
+          SNI:
+          Alpn:
+          Path:
+          Dest: 80
+          ProxyProtocolVer: 0
+      CertConfig:
+        CertMode: ${x_certmode}
+        CertDomain: "${x_domain}"
+        CertFile: /etc/XrayR/cert/${x_domain}.cert
+        KeyFile: /etc/XrayR/cert/${x_domain}.key
+        Provider: alidns
+        Email: ${x_email}
+        DNSEnv:
+          ALICLOUD_ACCESS_KEY: aaa
+          ALICLOUD_SECRET_KEY: bbb
+EOF
+
+    systemctl enable "XrayR@${name}" >/dev/null 2>&1
+    systemctl restart "XrayR@${name}"
+    sleep 2
+    if systemctl is-active --quiet "XrayR@${name}"; then
+        echo -e "${green}XrayR 实例 ${name} 启动成功${plain}"
+        echo -e "  服务：${green}XrayR@${name}${plain}   配置：${green}${cfg}${plain}"
+        echo -e "  面板：${green}${x_panel}${plain}   NodeID：${green}${x_nodeid}${plain}   类型：${green}${x_ntype}${plain}"
+    else
+        echo -e "${red}XrayR 实例 ${name} 可能启动失败，请执行：journalctl -u XrayR@${name} -e 查看日志${plain}"
+    fi
+}
+
+# 列出所有 XrayR 实例
+list_xrayr_instances() {
+    echo -e "${yellow}== XrayR 实例列表 ==${plain}"
+    printf "%-16s %-10s %s\n" "名称" "状态" "配置文件"
+    echo "-------------------------------------------------------------"
+    local f name state
+    for f in /etc/XrayR/config-*.yml; do
+        [[ -e "$f" ]] || continue
+        name=$(basename "$f" .yml)
+        name=${name#config-}
+        state=$(systemctl is-active "XrayR@${name}" 2>/dev/null)
+        printf "%-16s %-10s %s\n" "$name" "$state" "$f"
+    done
+    echo "-------------------------------------------------------------"
+}
+
+# 交互式选择 XrayR 实例：编号选择，回显到 X_NAME/X_SVC
+pick_xrayr_instance() {
+    local -a names
+    local f name
+    for f in /etc/XrayR/config-*.yml; do
+        [[ -e "$f" ]] || continue
+        name=$(basename "$f" .yml)
+        name=${name#config-}
+        names+=("$name")
+    done
+
+    local count=${#names[@]}
+    if [[ $count -eq 0 ]]; then
+        echo -e "${yellow}暂无 XrayR 实例${plain}"
+        return 1
+    fi
+
+    echo -e "${yellow}请选择 XrayR 实例：${plain}"
+    local i state
+    for ((i = 0; i < count; i++)); do
+        state=$(systemctl is-active "XrayR@${names[$i]}" 2>/dev/null)
+        printf "  ${green}%d${plain}) %-16s %s\n" "$((i + 1))" "${names[$i]}" "$state"
+    done
+
+    local sel
+    read -p "输入序号: " sel
+    if ! [[ "$sel" =~ ^[0-9]+$ ]] || [[ "$sel" -lt 1 || "$sel" -gt $count ]]; then
+        echo -e "${red}序号无效${plain}"
+        return 1
+    fi
+    X_NAME="${names[$((sel - 1))]}"
+    X_SVC="XrayR@${X_NAME}"
+    return 0
+}
+
+control_xrayr_instance() {
+    echo -e "${yellow}== 启动/停止/重启 XrayR 实例 ==${plain}"
+    pick_xrayr_instance || return
+    read -p "操作 (start/stop/restart): " act
+    case "$act" in
+        start|stop|restart)
+            systemctl "$act" "$X_SVC"
+            sleep 1
+            echo -e "当前状态：${green}$(systemctl is-active "$X_SVC" 2>/dev/null)${plain}"
+            ;;
+        *)
+            echo -e "${red}操作无效${plain}"
+            ;;
+    esac
+}
+
+status_xrayr_instance() {
+    echo -e "${yellow}== 查看 XrayR 实例状态 ==${plain}"
+    pick_xrayr_instance || return
+    systemctl status "$X_SVC" --no-pager
+}
+
+log_xrayr_instance() {
+    echo -e "${yellow}== 查看 XrayR 实例日志 ==${plain}"
+    pick_xrayr_instance || return
+    journalctl -u "$X_SVC" -e --no-pager
+}
+
+delete_xrayr_instance() {
+    echo -e "${yellow}== 删除 XrayR 实例 ==${plain}"
+    pick_xrayr_instance || return
+    read -p "确认删除 XrayR 实例 ${X_NAME}？[y/N]: " ok
+    [[ "$ok" != "y" && "$ok" != "Y" ]] && echo "已取消" && return
+
+    systemctl stop "$X_SVC" 2>/dev/null
+    systemctl disable "$X_SVC" 2>/dev/null
+    rm -f "/etc/XrayR/config-${X_NAME}.yml"
+    echo -e "${green}XrayR 实例 ${X_NAME} 已删除${plain}"
 }
 
 # 新增一个服务端实例：hysteria-server@<name> -> /etc/hysteria/<name>.yaml
@@ -597,31 +831,75 @@ delete_instance() {
     echo -e "${green}实例 ${INAME} 已删除${plain}"
 }
 
+# XrayR 实例管理子菜单
+xrayr_menu() {
+    while true; do
+        echo -e ""
+        echo -e "${green}==== XrayR 实例管理 ====${plain}"
+        echo -e "  ${green}1.${plain} 新增 XrayR 实例"
+        echo -e "  ${green}2.${plain} 实例列表"
+        echo -e "  ${green}3.${plain} 启动/停止/重启 实例"
+        echo -e "  ${green}4.${plain} 查看实例状态"
+        echo -e "  ${green}5.${plain} 查看实例日志"
+        echo -e "  ${green}6.${plain} 删除实例"
+        echo -e "  ${green}0.${plain} 返回上级菜单"
+        read -p "请输入选项 [0-6]: " choice
+        case "$choice" in
+            1) add_xrayr_instance ;;
+            2) list_xrayr_instances ;;
+            3) control_xrayr_instance ;;
+            4) status_xrayr_instance ;;
+            5) log_xrayr_instance ;;
+            6) delete_xrayr_instance ;;
+            0) break ;;
+            *) echo -e "${red}无效选项${plain}" ;;
+        esac
+    done
+}
+
+# Hysteria2 实例管理子菜单
+hysteria_menu() {
+    while true; do
+        echo -e ""
+        echo -e "${green}==== Hysteria2 实例管理 ====${plain}"
+        echo -e "  ${green}1.${plain} 新增服务端实例"
+        echo -e "  ${green}2.${plain} 新增客户端实例"
+        echo -e "  ${green}3.${plain} 实例列表"
+        echo -e "  ${green}4.${plain} 启动/停止/重启 实例"
+        echo -e "  ${green}5.${plain} 查看实例状态"
+        echo -e "  ${green}6.${plain} 查看实例日志"
+        echo -e "  ${green}7.${plain} 删除实例"
+        echo -e "  ${green}0.${plain} 返回上级菜单"
+        read -p "请输入选项 [0-7]: " choice
+        case "$choice" in
+            1) add_server_instance ;;
+            2) add_client_instance ;;
+            3) list_instances ;;
+            4) control_instance ;;
+            5) status_instance ;;
+            6) log_instance ;;
+            7) delete_instance ;;
+            0) break ;;
+            *) echo -e "${red}无效选项${plain}" ;;
+        esac
+    done
+}
+
 main_menu() {
     while true; do
         echo -e ""
         echo -e "${green}==== XrayR + Hysteria2 管理菜单 ====${plain}"
         echo -e "  ${green}1.${plain} 安装/更新 XrayR"
         echo -e "  ${green}2.${plain} 安装 Hysteria2 (二进制 + 客户端模板)"
-        echo -e "  ${green}3.${plain} 新增 Hysteria2 服务端实例"
-        echo -e "  ${green}4.${plain} 新增 Hysteria2 客户端实例"
-        echo -e "  ${green}5.${plain} 实例列表"
-        echo -e "  ${green}6.${plain} 启动/停止/重启 实例"
-        echo -e "  ${green}7.${plain} 查看实例状态"
-        echo -e "  ${green}8.${plain} 查看实例日志"
-        echo -e "  ${green}9.${plain} 删除实例"
+        echo -e "  ${green}3.${plain} XrayR 实例管理"
+        echo -e "  ${green}4.${plain} Hysteria2 实例管理"
         echo -e "  ${green}0.${plain} 退出"
-        read -p "请输入选项 [0-9]: " choice
+        read -p "请输入选项 [0-4]: " choice
         case "$choice" in
-            1) install_XrayR ;;
+            1) install_XrayR; install_xrayr_template ;;
             2) ensure_hysteria2 ;;
-            3) add_server_instance ;;
-            4) add_client_instance ;;
-            5) list_instances ;;
-            6) control_instance ;;
-            7) status_instance ;;
-            8) log_instance ;;
-            9) delete_instance ;;
+            3) xrayr_menu ;;
+            4) hysteria_menu ;;
             0) echo "已退出" && break ;;
             *) echo -e "${red}无效选项${plain}" ;;
         esac
