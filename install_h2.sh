@@ -431,6 +431,11 @@ add_client_instance() {
         insecure_val="true"
     fi
 
+    read -p "上行带宽 up (留空默认 500 mbps): " hy_up
+    [[ -z "$hy_up" ]] && hy_up="500 mbps"
+    read -p "下行带宽 down (留空默认 500 mbps): " hy_down
+    [[ -z "$hy_down" ]] && hy_down="500 mbps"
+
     local hy_socks hy_http
     hy_socks=$(find_free_port tcp)
     hy_http=$(find_free_port tcp)
@@ -448,6 +453,10 @@ tls:
   sni: ${hy_sni}
   insecure: ${insecure_val}
 
+bandwidth:
+  up: ${hy_up}
+  down: ${hy_down}
+
 socks5:
   listen: 127.0.0.1:${hy_socks}
 
@@ -462,6 +471,7 @@ EOF
         echo -e "${green}客户端实例 ${name} 启动成功${plain}"
         echo -e "  服务：${green}hysteria-client@${name}${plain}   配置：${green}${cfg}${plain}"
         echo -e "  SOCKS5：${green}127.0.0.1:${hy_socks}${plain}   HTTP：${green}127.0.0.1:${hy_http}${plain}"
+        echo -e "  带宽 up：${green}${hy_up}${plain}   down：${green}${hy_down}${plain}"
     else
         echo -e "${red}客户端实例 ${name} 可能启动失败，请执行：journalctl -u hysteria-client@${name} -e 查看日志${plain}"
     fi
